@@ -93,7 +93,8 @@ namespace Ryujinx.HLE.HOS.Services.Sockets.Bsd.Impl
                     {
                         outputEvents |= PollEventTypeMask.Error;
 
-                        if (!socket.Connected || !socket.IsBound)
+                        // UDP has no connection to lose; socket errors must not become POLLHUP.
+                        if (socket.SocketType == SocketType.Stream && (!socket.Connected || !socket.IsBound))
                         {
                             outputEvents |= PollEventTypeMask.Disconnected;
                         }
