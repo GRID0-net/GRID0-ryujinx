@@ -150,7 +150,10 @@ namespace Ryujinx.Ava.Systems
                 // Forgejo instance is located in Ukraine. Connection times will vary across the world.
                 buildSizeClient.Timeout = TimeSpan.FromSeconds(10);
 
-                HttpResponseMessage message = await buildSizeClient.GetAsync(new Uri(_versionResponse.ArtifactUrl), HttpCompletionOption.ResponseHeadersRead);
+                // [GRID0] Size the url actually being downloaded: _versionResponse is null on the
+                // GRID0 path, which skips the Ryubing update server. The null threw here and forced
+                // the single-threaded worker, which used to crash off the UI thread.
+                HttpResponseMessage message = await buildSizeClient.GetAsync(new Uri(downloadUrl), HttpCompletionOption.ResponseHeadersRead);
 
                 _buildSize = message.Content.Headers.ContentRange.Length.Value;
             }
@@ -220,18 +223,52 @@ namespace Ryujinx.Ava.Systems
                             ryuName = OperatingSystem.IsWindows() ? "Ryujinx.exe" : "Ryujinx";
                         }
 
-                        ProcessStartInfo processStart = new(ryuName)
-                        {
-                            UseShellExecute = true,
-                            WorkingDirectory = executableDirectory,
-                        };
+                        // [GRID0] On Windows a direct relaunch races this process tearing down and
+                        // the freshly written executable, and fails with 0xc0000142 even though the
+                        // update worked. A detached shell waits two seconds first; the direct start
+                        // stays as the fallback. (Same fix as Ryujinx-Nextendo.)
+                        bool relaunched = false;
 
-                        foreach (string argument in CommandLineState.Arguments)
+                        if (OperatingSystem.IsWindows())
                         {
-                            processStart.ArgumentList.Add(argument);
+                            try
+                            {
+                                string quotedArgs = string.Join(' ', CommandLineState.Arguments.Select(a => $"\"{a}\""));
+
+                                ProcessStartInfo delayedStart = new("cmd.exe")
+                                {
+                                    UseShellExecute = false,
+                                    CreateNoWindow = true,
+                                    WorkingDirectory = executableDirectory,
+                                    // Raw string, not ArgumentList: cmd.exe does not understand the
+                                    // CRT-style \" escaping ArgumentList would produce.
+                                    Arguments = $"/s /c \"ping 127.0.0.1 -n 3 > nul & start \"\" \"{ryuName}\" {quotedArgs}\"",
+                                };
+
+                                Process.Start(delayedStart);
+                                relaunched = true;
+                            }
+                            catch (Exception ex)
+                            {
+                                Logger.Warning?.Print(LogClass.Application, $"[GRID0] Delayed relaunch failed ({ex.Message}); starting directly.");
+                            }
                         }
 
-                        Process.Start(processStart);
+                        if (!relaunched)
+                        {
+                            ProcessStartInfo processStart = new(ryuName)
+                            {
+                                UseShellExecute = true,
+                                WorkingDirectory = executableDirectory,
+                            };
+
+                            foreach (string argument in CommandLineState.Arguments)
+                            {
+                                processStart.ArgumentList.Add(argument);
+                            }
+
+                            Process.Start(processStart);
+                        }
                     }
 
                     Environment.Exit(0);
@@ -389,7 +426,9 @@ namespace Ryujinx.Ava.Systems
                 updateFileStream.Write(buffer, 0, readSize);
             }
 
-            InstallUpdate(taskDialog, updateFile);
+            // [GRID0] This is a raw worker thread, and InstallUpdate touches the dialog, which is
+            // UI-thread only. Wait so nothing restarts before the files are in place.
+            Dispatcher.UIThread.InvokeAsync(() => InstallUpdate(taskDialog, updateFile)).Wait();
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -445,13 +484,18 @@ namespace Ryujinx.Ava.Systems
             taskDialog.SubHeader = LocaleManager.Instance[LocaleKeys.UpdaterExtracting];
             taskDialog.SetProgressBarState(0, FATaskDialogProgressState.Normal);
 
+            // [GRID0] GRID0 archives are packed from inside publish/, so the emulator sits at
+            // their root; Ryubing's carried a publish/ folder. Extract into the folder the rest
+            // of this method moves files from.
+            Directory.CreateDirectory(_updatePublishDir);
+
             if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS())
             {
-                ExtractTarXzipFile(updateFile, _updateDir);
+                ExtractTarXzipFile(updateFile, _updatePublishDir);
             }
             else if (OperatingSystem.IsWindows())
             {
-                Extract7ZipFile(updateFile, _updateDir);
+                Extract7ZipFile(updateFile, _updatePublishDir);
             }
             else
             {
@@ -593,6 +637,15 @@ namespace Ryujinx.Ava.Systems
             foreach (string directory in Directory.GetDirectories(root))
             {
                 string dirName = Path.GetFileName(directory);
+
+                // [GRID0] `portable` is the player's data (keys, firmware, saves, Config.json).
+                // Files below are moved with overwrite, so an update archive carrying one would
+                // reset it. Keep the player's; only create it when missing.
+                if (dirName.Equals("portable", StringComparison.OrdinalIgnoreCase))
+                {
+                    Directory.CreateDirectory(Path.Combine(dest, dirName));
+                    continue;
+                }
 
                 if (!Directory.Exists(Path.Combine(dest, dirName)))
                 {

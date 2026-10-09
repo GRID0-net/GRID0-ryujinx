@@ -43,7 +43,8 @@ env:
   # the upstream project's update server for the latest official build, which knows nothing about
   # this repository and would happily replace these binaries with an upstream one.
   RYUJINX_TARGET_RELEASE_CHANNEL_NAME: release
-  EXTRA_DEFINE_CONSTANTS: DISABLE_UPDATER
+  # The updater is on: it reads GRID0-net releases only (Updater.Grid0.cs), never Ryubing's.
+  EXTRA_DEFINE_CONSTANTS: ''
   RELEASE: 1
 
 jobs:

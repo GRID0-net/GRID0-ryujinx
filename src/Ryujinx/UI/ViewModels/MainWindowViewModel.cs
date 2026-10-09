@@ -167,7 +167,7 @@ namespace Ryujinx.Ava.UI.ViewModels
         public static AsyncRelayCommand UpdateCommand { get; } = Commands.Create(async () =>
         {
             if (Updater.CanUpdate(true))
-                await Updater.BeginUpdateAsync(true);
+                await Updater.BeginGrid0UpdateAsync(true);
         });
 
         private bool _isGameRunning;

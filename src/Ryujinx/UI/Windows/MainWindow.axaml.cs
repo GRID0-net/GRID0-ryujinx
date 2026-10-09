@@ -418,14 +418,12 @@ namespace Ryujinx.Ava.UI.Windows
             switch (ConfigurationState.Instance.UpdateCheckerType.Value)
             {
                 case UpdaterType.PromptAtStartup:
-                    await Updater.BeginUpdateAsync()
+                    await Updater.BeginGrid0UpdateAsync()
                         .Catch(task => Logger.Error?.Print(LogClass.Application, $"Updater Error: {task.Exception}"));
                     break;
                 case UpdaterType.CheckInBackground:
-                    if ((await Updater.CheckVersionAsync()).TryGet(out (Version Current, Version Incoming) versions))
-                    {
-                        Dispatcher.UIThread.Post(() => RyujinxApp.MainWindow.ViewModel.UpdateAvailable = versions.Current < versions.Incoming);
-                    }
+                    bool available = await Updater.Grid0UpdateAvailableAsync();
+                    Dispatcher.UIThread.Post(() => RyujinxApp.MainWindow.ViewModel.UpdateAvailable = available);
 
                     break;
             }
