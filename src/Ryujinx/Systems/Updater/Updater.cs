@@ -474,7 +474,9 @@ namespace Ryujinx.Ava.Systems
         
         private static void Extract7ZipFile(string archivePath, string outputDirectoryPath)
         {
-            IArchive archive = ArchiveFactory.OpenArchive(archivePath);
+            // [GRID0] Disposed, so the download is closed before InstallUpdate deletes it:
+            // Windows refuses to delete an open file, and the update crashed there.
+            using IArchive archive = ArchiveFactory.OpenArchive(archivePath);
             archive.WriteToDirectory(outputDirectoryPath);
         }
 
@@ -506,8 +508,20 @@ namespace Ryujinx.Ava.Systems
             // so the progressbar is just set to 100% after the decompression is done
             taskDialog.SetProgressBarState(100, FATaskDialogProgressState.Normal);
 
-            // Delete downloaded zip
-            File.Delete(updateFile);
+            // Delete downloaded zip. Best effort: a virus scanner can still hold it for a
+            // moment on Windows, and the update must not fail over a leftover temp file.
+            try
+            {
+                File.Delete(updateFile);
+            }
+            catch (IOException ex)
+            {
+                Logger.Warning?.Print(LogClass.Application, $"[GRID0] Could not delete the update download: {ex.Message}");
+            }
+            catch (UnauthorizedAccessException ex)
+            {
+                Logger.Warning?.Print(LogClass.Application, $"[GRID0] Could not delete the update download: {ex.Message}");
+            }
 
             List<string> allFiles = EnumerateFilesToDelete().ToList();
 
@@ -545,7 +559,16 @@ namespace Ryujinx.Ava.Systems
 
                 MoveAllFilesOver(_updatePublishDir, _homeDir, taskDialog);
 
-                Directory.Delete(_updateDir, true);
+                // [GRID0] Best effort: the update is already in place, and a temp folder a
+                // scanner still holds on Windows must not turn it into a crash.
+                try
+                {
+                    Directory.Delete(_updateDir, true);
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    Logger.Warning?.Print(LogClass.Application, $"[GRID0] Could not clean up the update folder: {ex.Message}");
+                }
             }
 
             _updateSuccessful = true;
